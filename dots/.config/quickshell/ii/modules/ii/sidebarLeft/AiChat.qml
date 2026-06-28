@@ -45,9 +45,21 @@ Item {
     property var allCommands: [
         {
             name: "attach",
-            description: Translation.tr("Attach a file. Only works with Gemini."),
+            description: Translation.tr("Attach a file (image/PDF). Works with Gemini and Claude. Leave empty to pick a file."),
             execute: args => {
-                Ai.attachFile(args.join(" ").trim());
+                const path = args.join(" ").trim();
+                if (path.length === 0) {
+                    filePickerProc.running = true;
+                } else {
+                    Ai.attachFile(path);
+                }
+            }
+        },
+        {
+            name: "login",
+            description: Translation.tr("Sign in to Claude with your subscription (no API key)."),
+            execute: () => {
+                Ai.loginClaude();
             }
         },
         {
@@ -214,6 +226,19 @@ Inline w/ backslash and round brackets \\(e^{i\\pi} + 1 = 0\\)
 
         // Always scroll to bottom when user sends a message
         messageListView.positionViewAtEnd();
+    }
+
+    Process {
+        id: filePickerProc
+        command: ["bash", FileUtils.trimFileProtocol(`${Directories.scriptPath}/ai/pick-file.sh`)]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                const path = text.trim();
+                if (path.length > 0) {
+                    Ai.attachFile(path);
+                }
+            }
+        }
     }
 
     Process {
@@ -398,7 +423,7 @@ Inline w/ backslash and round brackets \\(e^{i\\pi} + 1 = 0\\)
                 shown: Ai.messageIDs.length === 0
                 icon: "neurology"
                 title: Translation.tr("Large language models")
-                description: Translation.tr("Type /key to get started with online models\nCtrl+O to expand sidebar\nCtrl+P to pin sidebar\nCtrl+D to detach sidebar")
+                description: Translation.tr("Type /key for online models, or /login for Claude (no API key)\nCtrl+O to expand sidebar\nCtrl+P to pin sidebar\nCtrl+D to detach sidebar")
                 shape: MaterialShape.Shape.PixelCircle
             }
 
@@ -692,6 +717,38 @@ Inline w/ backslash and round brackets \\(e^{i\\pi} + 1 = 0\\)
                                 }
                             }
                         }
+                    }
+                }
+                RippleButton { // Attach file button
+                    id: attachButton
+                    Layout.alignment: Qt.AlignBottom
+                    implicitWidth: 40
+                    implicitHeight: 40
+                    buttonRadius: Appearance.rounding.small
+                    toggled: Ai.pendingFilePath.length > 0
+
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            if (Ai.pendingFilePath.length > 0) {
+                                Ai.attachFile("");
+                            } else {
+                                filePickerProc.running = true;
+                            }
+                        }
+                    }
+
+                    StyledToolTip {
+                        text: Ai.pendingFilePath.length > 0 ? Translation.tr("Remove attachment") : Translation.tr("Attach a file (image/PDF)")
+                    }
+
+                    contentItem: MaterialSymbol {
+                        anchors.centerIn: parent
+                        horizontalAlignment: Text.AlignHCenter
+                        iconSize: 22
+                        color: attachButton.toggled ? Appearance.m3colors.m3onPrimary : Appearance.colors.colOnLayer2
+                        text: Ai.pendingFilePath.length > 0 ? "close" : "attach_file"
                     }
                 }
                 RippleButton { // Send button

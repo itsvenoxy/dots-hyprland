@@ -23,6 +23,7 @@ Singleton {
     property Component geminiApiStrategy: GeminiApiStrategy {}
     property Component openaiApiStrategy: OpenAiApiStrategy {}
     property Component mistralApiStrategy: MistralApiStrategy {}
+    property Component anthropicApiStrategy: AnthropicApiStrategy {}
     readonly property string interfaceRole: "interface"
     readonly property string apiKeyEnvVarName: "API_KEY"
 
@@ -233,6 +234,49 @@ Singleton {
             ],
             "search": [],
             "none": [],
+        },
+        "anthropic": {
+            "functions": [
+                {
+                    "name": "get_shell_config",
+                    "description": "Get the desktop shell config file contents",
+                    "input_schema": { "type": "object", "properties": {} }
+                },
+                {
+                    "name": "set_shell_config",
+                    "description": "Set a field in the desktop graphical shell config file. Must only be used after `get_shell_config`.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "key": {
+                                "type": "string",
+                                "description": "The key to set, e.g. `bar.borderless`. MUST NOT BE GUESSED, use `get_shell_config` to see what keys are available before setting.",
+                            },
+                            "value": {
+                                "type": "string",
+                                "description": "The value to set, e.g. `true`"
+                            }
+                        },
+                        "required": ["key", "value"]
+                    }
+                },
+                {
+                    "name": "run_shell_command",
+                    "description": "Run a shell command in bash and get its output. Use this only for quick commands that don't require user interaction. For commands that require interaction, ask the user to run manually instead.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The bash command to run",
+                            },
+                        },
+                        "required": ["command"]
+                    }
+                },
+            ],
+            "search": [],
+            "none": [],
         }
     }
     property list<var> availableTools: Object.keys(root.tools[models[currentModelId]?.api_format])
@@ -294,6 +338,42 @@ Singleton {
             "key_get_description": Translation.tr("**Instructions**: Log into Mistral account, go to Keys on the sidebar, click Create new key"),
             "api_format": "mistral",
         }),
+        "claude-opus-4-8": aiModelComponent.createObject(this, {
+            "name": "Claude Opus 4.8",
+            "icon": "spark-symbolic",
+            "description": Translation.tr("Online | Anthropic's most capable model\nSigns in with your Claude subscription (Pro/Max) — no API key needed. Use /login if not signed in."),
+            "homepage": "https://claude.ai",
+            "endpoint": "https://api.anthropic.com/v1/messages",
+            "model": "claude-opus-4-8",
+            "requires_key": false,
+            "key_id": "anthropic",
+            "api_format": "anthropic",
+            "extraParams": ({ "max_tokens": 16000, "thinking": { "type": "adaptive", "display": "summarized" } }),
+        }),
+        "claude-sonnet-4-6": aiModelComponent.createObject(this, {
+            "name": "Claude Sonnet 4.6",
+            "icon": "spark-symbolic",
+            "description": Translation.tr("Online | Anthropic's balanced model\nSigns in with your Claude subscription (Pro/Max) — no API key needed. Use /login if not signed in."),
+            "homepage": "https://claude.ai",
+            "endpoint": "https://api.anthropic.com/v1/messages",
+            "model": "claude-sonnet-4-6",
+            "requires_key": false,
+            "key_id": "anthropic",
+            "api_format": "anthropic",
+            "extraParams": ({ "max_tokens": 8192, "thinking": { "type": "adaptive", "display": "summarized" } }),
+        }),
+        "claude-haiku-4-5": aiModelComponent.createObject(this, {
+            "name": "Claude Haiku 4.5",
+            "icon": "spark-symbolic",
+            "description": Translation.tr("Online | Anthropic's fastest model\nSigns in with your Claude subscription (Pro/Max) — no API key needed. Use /login if not signed in."),
+            "homepage": "https://claude.ai",
+            "endpoint": "https://api.anthropic.com/v1/messages",
+            "model": "claude-haiku-4-5",
+            "requires_key": false,
+            "key_id": "anthropic",
+            "api_format": "anthropic",
+            "extraParams": ({ "max_tokens": 8192 }),
+        }),
     }
     property var modelList: Object.keys(root.models)
     property var currentModelId: Persistent.states?.ai?.model || modelList[0]
@@ -302,6 +382,7 @@ Singleton {
         "openai": openaiApiStrategy.createObject(this),
         "gemini": geminiApiStrategy.createObject(this),
         "mistral": mistralApiStrategy.createObject(this),
+        "anthropic": anthropicApiStrategy.createObject(this),
     }
     property ApiStrategy currentApiStrategy: apiStrategies[models[currentModelId]?.api_format || "openai"]
 
@@ -498,6 +579,9 @@ Singleton {
             }
             if (setPersistentState) Persistent.states.ai.model = modelId;
             if (feedback) root.addMessage(Translation.tr("Model set to %1").arg(model.name), root.interfaceRole);
+            if (model.api_format === "anthropic") {
+                root.checkClaudeAuth(true);
+            }
             if (model.requires_key) {
                 // If key not there show advice
                 if (root.apiKeysLoaded && (!root.apiKeys[model.key_id] || root.apiKeys[model.key_id].length === 0)) {
@@ -715,6 +799,49 @@ Singleton {
                 root.addApiKeyAdvice(models[requester.message.model]);
             }
         }
+    }
+
+    // ===== Claude (Anthropic) subscription login — no API key =====
+    property bool claudeAuthenticated: false
+    readonly property string claudeTokenScriptPath: CF.FileUtils.trimFileProtocol(`${Directories.scriptPath}/ai/claude-token.sh`)
+    readonly property string claudeLoginScriptPath: CF.FileUtils.trimFileProtocol(`${Directories.scriptPath}/ai/claude-login.sh`)
+
+    Process {
+        id: claudeAuthChecker
+        property bool announce: false
+        command: ["bash", "-c", `'${root.claudeTokenScriptPath}' >/dev/null 2>&1 && echo yes || echo no`]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                root.claudeAuthenticated = (text.trim() === "yes");
+                if (claudeAuthChecker.announce && !root.claudeAuthenticated
+                        && models[currentModelId]?.api_format === "anthropic") {
+                    root.addMessage(Translation.tr("Not signed in to Claude. Run `/login` to sign in with your Claude subscription (no API key needed)."), root.interfaceRole);
+                }
+                claudeAuthChecker.announce = false;
+            }
+        }
+    }
+
+    function checkClaudeAuth(announce = false) {
+        claudeAuthChecker.announce = announce;
+        claudeAuthChecker.running = true;
+    }
+
+    Process {
+        id: claudeLoginProc
+        command: ["bash", root.claudeLoginScriptPath]
+        stdout: StdioCollector {
+            onStreamFinished: {
+                if (text.trim().length > 0)
+                    root.addMessage(text.trim(), root.interfaceRole);
+                root.checkClaudeAuth(false);
+            }
+        }
+    }
+
+    function loginClaude() {
+        root.addMessage(Translation.tr("Opening Claude sign-in…"), root.interfaceRole);
+        claudeLoginProc.running = true;
     }
 
     function sendUserMessage(message) {
